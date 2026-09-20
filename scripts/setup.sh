@@ -25,9 +25,8 @@ if [[ ! -d "$KERNEL_DIR/.repo" ]]; then
 	mkdir -p "$KERNEL_DIR"
 	cd "$KERNEL_DIR"
 	repo init -u https://android.googlesource.com/kernel/manifest \
-		-b "common-$BRANCH" \
-		--repo-url=https://android.googlesource.com/tools/repo \
-		--repo-branch=stable
+		-b "$BRANCH" \
+		--depth=1
 	repo sync -c -j"$(nproc)" --no-tags --no-clone-bundle
 else
 	echo "==> Kernel source already present, syncing..."

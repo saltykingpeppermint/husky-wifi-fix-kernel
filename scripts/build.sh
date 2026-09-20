@@ -24,14 +24,11 @@ if [[ "${CLEAN:-0}" == "1" ]]; then
 	./tools/bazel clean --expunge 2>/dev/null || true
 fi
 
-# Build husky GKI kernel (matches LineageOS android16)
+# Build shusky GKI kernel (Pixel 8 / 8 Pro share this tree)
 echo "==> Compiling kernel (45–90 min on first run)..."
-./build_shusky.sh --kernel_build_mode=user 2>&1 | tee "$OUT_DIR/build.log" || {
-	# Fallback: bazel build directly
-	echo "==> build_shusky.sh failed, trying bazel directly..."
-	./tools/bazel run //private/google-modules/soc/gs:gs_shusky_kbuild \
-		-- --kernel_build_mode=user
-}
+bash private/devices/google/shusky/build_shusky.sh \
+	--config=pixel_debug_common \
+	--lto=thin 2>&1 | tee "$OUT_DIR/build.log"
 
 mkdir -p "$OUT_DIR/images"
 
