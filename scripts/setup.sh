@@ -38,8 +38,8 @@ cd "$KERNEL_DIR"
 
 # Install KernelSU into common kernel tree
 echo "==> Installing KernelSU..."
-if [[ ! -d "$KERNEL_DIR/common/KernelSU" ]]; then
-	cd "$KERNEL_DIR/common"
+if [[ ! -d "$KERNEL_DIR/aosp/KernelSU" ]]; then
+	cd "$KERNEL_DIR/aosp"
 	curl -LSs "https://github.com/tiann/KernelSU/raw/main/kernel/setup.sh" | bash -
 	cd "$KERNEL_DIR"
 fi

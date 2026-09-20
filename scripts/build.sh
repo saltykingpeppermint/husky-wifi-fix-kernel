@@ -53,7 +53,7 @@ fi
 
 # Verify KernelSU is in the kernel
 echo "==> Verifying KernelSU integration..."
-if strings "$OUT_DIR/images/boot.img" 2>/dev/null | grep -qi "kernelsu"; then
+if strings "$OUT_DIR/images/boot.img" 2>/dev/null | grep -qi "kernelsu\|KernelSU"; then
 	echo "    KernelSU: OK"
 else
 	echo "    WARNING: KernelSU string not found in boot.img — verify setup.sh ran correctly"

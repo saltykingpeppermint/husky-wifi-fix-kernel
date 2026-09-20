@@ -58,8 +58,9 @@ jobs:
           df -h
 
       - name: Install KernelSU
-        working-directory: kernel/common
+        working-directory: kernel/aosp
         run: |
+          ls -la drivers/ || ls -la
           curl -LSs "https://github.com/tiann/KernelSU/raw/main/kernel/setup.sh" | bash -
           git add -A
           git commit -m "Integrate KernelSU" || true
