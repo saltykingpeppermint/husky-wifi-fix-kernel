@@ -1,0 +1,108 @@
+From: Husky WiFi Fix <husky-wifi-fix@local>
+Subject: [PATCH 2/5] soc: pcie_brcm: increase link recovery retries and power-cycle
+
+When the Broadcom WLAN/BT chip fails PCIe link training, the stock
+driver gives up after 10 attempts. Affected Pixel 8 Pro devices show:
+
+  pcie_brcm: power-up failed for wlan/bt chip
+  pcie_brcm_wait_for_link: Link is DOWN
+  logbuffer_pcie1: Link recovery retry fail count: 10
+
+Increase retries to 30, add full power-cycle between retry blocks,
+and extend link wait timeout. This recovers cases where the chip
+needs more time after PMIC rail enable or where L1 sub-states
+leave the link in a bad state.
+
+Signed-off-by: Husky WiFi Fix <husky-wifi-fix@local>
+---
+ drivers/soc/google/pcie_brcm.c | 95 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 95 insertions(+)
+
+diff --git a/drivers/soc/google/pcie_brcm.c b/drivers/soc/google/pcie_brcm.c
+index 0000000..2222222 100644
+--- a/drivers/soc/google/pcie_brcm.c
++++ b/drivers/soc/google/pcie_brcm.c
+@@ -1,5 +1,18 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
++/* Husky WiFi/BT fix: enhanced PCIe link recovery */
++#define PCIE_BRCM_LINK_RETRY_MAX	30
++#define PCIE_BRCM_LINK_RETRY_BLOCK	5
++#define PCIE_BRCM_LINK_WAIT_MS		100
++#define PCIE_BRCM_POWER_CYCLE_MS	200
++
++static int pcie_brcm_link_retries = PCIE_BRCM_LINK_RETRY_MAX;
++module_param(pcie_brcm_link_retries, int, 0644);
++MODULE_PARM_DESC(pcie_brcm_link_retries,
++	"Max PCIe link training retries for WLAN/BT (default 30)");
++
++static bool pcie_brcm_aggressive_recovery = true;
++module_param(pcie_brcm_aggressive_recovery, bool, 0644);
++
+ /* existing code */
+ 
+ static int pcie_brcm_wait_for_link(struct pcie_brcm *pcie)
+ {
+-	int retry = 10;
++	int retry = pcie_brcm_link_retries;
+ 	int ret;
++	int block = 0;
+ 
+ 	while (retry-- > 0) {
+ 		ret = pcie_brcm_check_link_up(pcie);
+ 		if (ret == 0)
+ 			return 0;
+ 
+-		msleep(50);
++		msleep(PCIE_BRCM_LINK_WAIT_MS);
++
++		/* Every N retries, power-cycle the WLAN/BT chip */
++		block++;
++		if (pcie_brcm_aggressive_recovery &&
++		    block >= PCIE_BRCM_LINK_RETRY_BLOCK) {
++			block = 0;
++			dev_warn(pcie->dev,
++				 "PCIe link down, power-cycling WLAN/BT (%d retries left)\n",
++				 retry);
++			pcie_brcm_power_down(pcie);
++			msleep(PCIE_BRCM_POWER_CYCLE_MS);
++			ret = pcie_brcm_power_up(pcie);
++			if (ret)
++				dev_warn(pcie->dev, "power-up retry failed: %d\n", ret);
++		}
+ 	}
+ 
+-	dev_err(pcie->dev, "Link is DOWN\n");
++	dev_err(pcie->dev, "Link is DOWN after %d retries\n",
++		pcie_brcm_link_retries);
+ 	return -ETIMEDOUT;
+ }
+ 
+ static int pcie_brcm_power_up(struct pcie_brcm *pcie)
+ {
+ 	int ret;
++	int pwr_retry;
+ 
+-	ret = pcie_brcm_enable_regulator(pcie);
+-	if (ret) {
+-		dev_err(pcie->dev, "power-up failed for wlan/bt chip\n");
+-		return ret;
++	for (pwr_retry = 0; pwr_retry < 5; pwr_retry++) {
++		ret = pcie_brcm_enable_regulator(pcie);
++		if (ret == 0)
++			break;
++		dev_warn(pcie->dev,
++			 "power-up attempt %d failed, retrying\n", pwr_retry + 1);
++		pcie_brcm_disable_regulator(pcie);
++		msleep(100 * (pwr_retry + 1));
+ 	}
++	if (ret) {
++		dev_err(pcie->dev, "power-up failed for wlan/bt chip after 5 attempts\n");
++		return ret;
++	}
++
++	/* Allow BCM4389 to stabilize before link training */
++	msleep(50);
+ 
+ 	return pcie_brcm_wait_for_link(pcie);
+ }

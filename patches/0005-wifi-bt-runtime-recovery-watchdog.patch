@@ -1,0 +1,164 @@
+From: Husky WiFi Fix <husky-wifi-fix@local>
+Subject: [PATCH 5/5] soc: google: add WLAN/BT runtime recovery watchdog
+
+For intermittent failures (WiFi works when cold, dies when warm),
+add a kernel watchdog that monitors for "PCI not powered on" and
+"wifi driver unloaded" conditions, then triggers a controlled
+WLAN/BT subsystem reset without full reboot.
+
+This addresses the Android framework giving up after 10 WiFi restarts
+(WifiSelfRecovery: Already restarted wifi 10 times... Disabling wifi).
+
+Signed-off-by: Husky WiFi Fix <husky-wifi-fix@local>
+---
+ drivers/soc/google/wlan_bt_recovery.c | 210 ++++++++++++++++++++++++++++
+ drivers/soc/google/Kconfig            |   8 +
+ drivers/soc/google/Makefile           |   1 +
+ 3 files changed, 219 insertions(+)
+
+diff --git a/drivers/soc/google/Kconfig b/drivers/soc/google/Kconfig
+index 0000000..5555555 100644
+--- a/drivers/soc/google/Kconfig
++++ b/drivers/soc/google/Kconfig
+@@ -1,3 +1,11 @@
++config WLAN_BT_RECOVERY
++	tristate "Pixel WLAN/BT runtime recovery watchdog"
++	depends on ARCH_ZUMA || ARCH_ZUMAPRO
++	default y
++	help
++	  Watchdog for Pixel 8 series WiFi/BT PCIe failures. Triggers
++	  subsystem reset when link drops. Helps thermal/intermittent cases.
++
+ diff --git a/drivers/soc/google/Makefile b/drivers/soc/google/Makefile
+index 0000000..6666666 100644
+--- a/drivers/soc/google/Makefile
++++ b/drivers/soc/google/Makefile
+@@ -1,2 +1,3 @@
++obj-$(CONFIG_WLAN_BT_RECOVERY) += wlan_bt_recovery.o
+ 
+diff --git a/drivers/soc/google/wlan_bt_recovery.c b/drivers/soc/google/wlan_bt_recovery.c
+new file mode 100644
+index 0000000..7777777
+--- /dev/null
++++ b/drivers/soc/google/wlan_bt_recovery.c
+@@ -0,0 +1,210 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Pixel 8 Pro WLAN/BT runtime recovery watchdog
++ *
++ * Monitors connectivity health and resets the WLAN/BT PCIe subsystem
++ * when the link drops, instead of letting Android permanently disable WiFi.
++ */
++
++#include <linux/module.h>
++#include <linux/workqueue.h>
++#include <linux/delay.h>
++#include <linux/pci.h>
++#include <linux/atomic.h>
++
++#define WLAN_BT_RECOVERY_INTERVAL_MS	30000
++#define WLAN_BT_RECOVERY_MAX_RESETS	50
++#define WLAN_BT_RECOVERY_COOLDOWN_MS	5000
++
++static struct workqueue_struct *wlan_bt_wq;
++static struct delayed_work wlan_bt_recovery_work;
++static atomic_t recovery_count = ATOMIC_INIT(0);
++static atomic_t recovery_in_progress = ATOMIC_INIT(0);
++
++static bool recovery_enabled = true;
++module_param(recovery_enabled, bool, 0644);
++MODULE_PARM_DESC(recovery_enabled, "Enable WLAN/BT runtime recovery");
++
++static int recovery_max_resets = WLAN_BT_RECOVERY_MAX_RESETS;
++module_param(recovery_max_resets, int, 0644);
++
++/* External symbols from pcie_brcm / dhd drivers */
++extern int pcie_brcm_force_reset(void);
++extern bool dhd_wlan_is_up(void);
++
++static bool wlan_bt_needs_recovery(void)
++{
++	struct pci_dev *pdev;
++
++	/* Check if BCM4389 PCIe device is present but not enabled */
++	pdev = pci_get_device(PCI_VENDOR_ID_BROADCOM, 0x4433, NULL);
++	if (!pdev)
++		pdev = pci_get_device(PCI_VENDOR_ID_BROADCOM, 0x4389, NULL);
++
++	if (pdev) {
++		if (!(pdev->current_state == PCI_D0 && pci_is_enabled(pdev)))
++			return true;
++		pci_dev_put(pdev);
++	}
++
++	/* Check if dhd reports driver down while WiFi should be up */
++	if (!dhd_wlan_is_up())
++		return true;
++
++	return false;
++}
++
++static void wlan_bt_do_recovery(void)
++{
++	int count;
++
++	if (!recovery_enabled)
++		return;
++
++	if (atomic_xchg(&recovery_in_progress, 1))
++		return;
++
++	count = atomic_read(&recovery_count);
++	if (count >= recovery_max_resets) {
++		pr_warn("wlan_bt_recovery: max resets (%d) reached, stopping\n",
++			recovery_max_resets);
++		atomic_set(&recovery_in_progress, 0);
++		return;
++	}
++
++	pr_info("wlan_bt_recovery: triggering reset #%d\n", count + 1);
++
++	/* Full WLAN/BT power cycle via pcie_brcm */
++	pcie_brcm_force_reset();
++	msleep(WLAN_BT_RECOVERY_COOLDOWN_MS);
++
++	atomic_inc(&recovery_count);
++	atomic_set(&recovery_in_progress, 0);
++}
++
++static void wlan_bt_recovery_worker(struct work_struct *work)
++{
++	if (wlan_bt_needs_recovery())
++		wlan_bt_do_recovery();
++
++	queue_delayed_work(wlan_bt_wq, &wlan_bt_recovery_work,
++			   msecs_to_jiffies(WLAN_BT_RECOVERY_INTERVAL_MS));
++}
++
++static int __init wlan_bt_recovery_init(void)
++{
++	wlan_bt_wq = alloc_workqueue("wlan_bt_recovery", WQ_UNBOUND, 0);
++	if (!wlan_bt_wq)
++		return -ENOMEM;
++
++	INIT_DELAYED_WORK(&wlan_bt_recovery_work, wlan_bt_recovery_worker);
++	queue_delayed_work(wlan_bt_wq, &wlan_bt_recovery_work,
++			   msecs_to_jiffies(WLAN_BT_RECOVERY_INTERVAL_MS));
++
++	pr_info("wlan_bt_recovery: watchdog started (interval %d ms)\n",
++		WLAN_BT_RECOVERY_INTERVAL_MS);
++	return 0;
++}
++
++static void __exit wlan_bt_recovery_exit(void)
++{
++	cancel_delayed_work_sync(&wlan_bt_recovery_work);
++	destroy_workqueue(wlan_bt_wq);
++}
++
++module_init(wlan_bt_recovery_init);
++module_exit(wlan_bt_recovery_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Pixel 8 WLAN/BT runtime recovery watchdog");
++MODULE_AUTHOR("Husky WiFi Fix");

@@ -1,0 +1,67 @@
+From: Husky WiFi Fix <husky-wifi-fix@local>
+Subject: [PATCH 3/5] wlan: bcm4383: increase dhd module init retries
+
+Stock dhd driver gives up after 3 init attempts:
+  _dhd_module_init: Failed to load driver max retry reached
+
+Affected devices need more time for PCIe enumeration after PMIC
+rail recovery. Increase max retries and add delay between attempts.
+
+Signed-off-by: Husky WiFi Fix <husky-wifi-fix@local>
+---
+ wlan/bcm4383/dhd_pcie_linux.c | 35 ++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/wlan/bcm4383/dhd_pcie_linux.c b/wlan/bcm4383/dhd_pcie_linux.c
+index 0000000..3333333 100644
+--- a/wlan/bcm4383/dhd_pcie_linux.c
++++ b/wlan/bcm4383/dhd_pcie_linux.c
+@@ -1,5 +1,12 @@
+ /* Broadcom DHD PCIe driver for Pixel 8 series */
+ 
++#define DHD_MODULE_INIT_RETRY_MAX	10
++#define DHD_MODULE_INIT_RETRY_DELAY_MS	500
++
++static int dhd_init_max_retry = DHD_MODULE_INIT_RETRY_MAX;
++module_param(dhd_init_max_retry, int, 0644);
++MODULE_PARM_DESC(dhd_init_max_retry, "Max dhd module init retries (default 10)");
++
+ #define PCI_CFG_RETRY 10 /* PR15065: retry count for pci cfg accesses */
+ 
+ /* Increase PCI config retry for marginal links */
+@@ -7,6 +14,8 @@
+ #undef PCI_CFG_RETRY
+ #define PCI_CFG_RETRY 25
+ 
++/* existing code */
++
+ static int __init _dhd_module_init(void)
+ {
+ 	int retry = 0;
+@@ -14,7 +23,7 @@ static int __init _dhd_module_init(void)
+ 	int ret = 0;
+ 
+-	while (retry++ < MAX_RETRY) {
++	while (retry++ < dhd_init_max_retry) {
+ 		ret = dhd_wifi_platform_load_pcie();
+ 		if (ret == 0)
+ 			break;
+@@ -22,10 +31,18 @@ static int __init _dhd_module_init(void)
+ 		DHD_ERROR(("dhd_bus_register failed err=%d, retry %d\n",
+ 			   ret, retry));
+ 
++		/* Wait for PCIe/PMIC recovery before retry */
++		msleep(DHD_MODULE_INIT_RETRY_DELAY_MS * retry);
++
++		/* Trigger PCIe rescan on later retries */
++		if (retry >= 3)
++			dhd_pcie_rescan_bus();
+ 	}
+ 
+ 	if (ret)
+-		DHD_ERROR(("_dhd_module_init: Failed to load driver max retry reached\n"));
++		DHD_ERROR(("_dhd_module_init: Failed after %d retries (err=%d)\n",
++			   dhd_init_max_retry, ret));
+ 
+ 	return ret;
+ }

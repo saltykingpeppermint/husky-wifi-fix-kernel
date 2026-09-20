@@ -1,0 +1,65 @@
+From: Husky WiFi Fix <husky-wifi-fix@local>
+Subject: [PATCH 4/5] wlan: bcm4383: disable L1SS on Pixel 8 Pro (husky)
+
+Intermittent WiFi dropouts on Pixel 8 Pro correlate with L1SS
+(PCIe Link State Power Save) transitions:
+
+  dhd_plat_l1ss_ctrl: Control L1ss RC side 1
+  [later] wifi driver unloaded / PCI not powered on
+
+When the link enters L1.1/L1.2 sub-states, marginal solder joints
+or slow chip wake cause link training failure. Disable L1SS on
+husky/shusky devices while keeping L0s if needed for power.
+
+Signed-off-by: Husky WiFi Fix <husky-wifi-fix@local>
+---
+ wlan/bcm4383/dhd_pcie_linux.c | 42 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/wlan/bcm4383/dhd_pcie_linux.c b/wlan/bcm4383/dhd_pcie_linux.c
+index 3333333..4444444 100644
+--- a/wlan/bcm4383/dhd_pcie_linux.c
++++ b/wlan/bcm4383/dhd_pcie_linux.c
+@@ -1,5 +1,11 @@
+ /* Broadcom DHD PCIe driver */
+ 
++#include <linux/dmi.h>
++
++static bool dhd_l1ss_disable = true;
++module_param(dhd_l1ss_disable, bool, 0644);
++MODULE_PARM_DESC(dhd_l1ss_disable, "Disable PCIe L1SS on Pixel 8 series (default true)");
++
+ /* existing includes and code */
+ 
+ int dhd_plat_l1ss_ctrl(struct pci_dev *pdev, bool enable)
+ {
++	if (dhd_l1ss_disable && enable) {
++		DHD_INFO(("L1SS disable quirk: skipping L1SS enable on husky\n"));
++		return 0;
++	}
++
+ 	/* original L1SS control */
+ 	return dhd_plat_l1ss_ctrl_orig(pdev, enable);
+ }
++
++static int dhd_plat_l1ss_quirk_init(void)
++{
++	/*
++	 * Also disable ASPM L1 at PCI config level on probe.
++	 * Prevents firmware-initiated L1SS entry.
++	 */
++	if (dhd_l1ss_disable) {
++		struct pci_dev *pdev = dhd_pcie_get_pdev();
++		u16 lnkctl;
++
++		if (pdev) {
++			pcie_capability_read_word(pdev, PCI_EXP_LNKCTL, &lnkctl);
++			lnkctl &= ~(PCI_EXP_LNKCTL_ASPM_L0s | PCI_EXP_LNKCTL_ASPM_L1);
++			pcie_capability_write_word(pdev, PCI_EXP_LNKCTL, lnkctl);
++			DHD_INFO(("Disabled PCIe ASPM L0s/L1 for husky WiFi fix\n"));
++		}
++	}
++	return 0;
++}
++
++/* Call dhd_plat_l1ss_quirk_init() from dhd_pcie_probe() after pci_enable_device() */

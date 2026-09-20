@@ -1,0 +1,7 @@
+kernel/
+out/
+*.img
+*.zip
+*.log
+.cache/
+ccache/
