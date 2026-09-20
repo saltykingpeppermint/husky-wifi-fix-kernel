@@ -58,9 +58,11 @@ jobs:
           df -h
 
       - name: Install KernelSU
-        working-directory: kernel
+        working-directory: kernel/common
         run: |
           curl -LSs "https://github.com/tiann/KernelSU/raw/main/kernel/setup.sh" | bash -
+          git add -A
+          git commit -m "Integrate KernelSU" || true
 
       - name: Apply WiFi/BT recovery patches
         run: |

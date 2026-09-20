@@ -39,7 +39,9 @@ cd "$KERNEL_DIR"
 # Install KernelSU into common kernel tree
 echo "==> Installing KernelSU..."
 if [[ ! -d "$KERNEL_DIR/common/KernelSU" ]]; then
+	cd "$KERNEL_DIR/common"
 	curl -LSs "https://github.com/tiann/KernelSU/raw/main/kernel/setup.sh" | bash -
+	cd "$KERNEL_DIR"
 fi
 
 # Apply WiFi/BT recovery patches
