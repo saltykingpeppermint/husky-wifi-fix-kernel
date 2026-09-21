@@ -1,5 +1,8 @@
 kernel/
 out/
+anykernel3/tools/
+anykernel3/META-INF/
+anykernel3/README.md
 *.img
 *.zip
 *.log

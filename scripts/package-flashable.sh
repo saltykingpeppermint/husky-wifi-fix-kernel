@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package kernel images into a flashable ZIP for Lineage Recovery
+# Package kernel images into AnyKernel3 flashable ZIP for Pixel 8 Pro
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,52 +7,41 @@ VERSION="${1:-husky-wifi-fix-$(date +%Y%m%d)}"
 OUT_DIR="$ROOT/out"
 FLASH_DIR="$OUT_DIR/flashable/staging"
 ZIP_PATH="$OUT_DIR/flashable/${VERSION}.zip"
+AK3_DIR="$ROOT/anykernel3"
 
 rm -rf "$FLASH_DIR"
 mkdir -p "$FLASH_DIR"
 
-# Copy kernel images
-cp "$OUT_DIR/images/boot.img" "$FLASH_DIR/"
-cp "$OUT_DIR/images/vendor_kernel_boot.img" "$FLASH_DIR/" 2>/dev/null || true
-cp "$OUT_DIR/images/dtbo.img" "$FLASH_DIR/" 2>/dev/null || true
+# Clone AnyKernel3 tools if not present
+if [[ ! -f "$AK3_DIR/tools/ak3-core.sh" ]]; then
+	echo "==> Cloning AnyKernel3..."
+	git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "$AK3_DIR"
+fi
 
-mkdir -p "$FLASH_DIR/META-INF/com/google/android"
+# Copy AK3 framework + our anykernel.sh
+cp -r "$AK3_DIR/tools" "$AK3_DIR/META-INF" "$FLASH_DIR/"
+cp "$ROOT/anykernel3/anykernel.sh" "$FLASH_DIR/anykernel.sh"
+chmod +x "$FLASH_DIR/anykernel.sh"
 
-# Updater script for Lineage Recovery / TWRP
-cat > "$FLASH_DIR/META-INF/com/google/android/updater-script" << 'UPDATER'
-ui_print("Husky WiFi/BT Recovery Kernel");
-ui_print("With KernelSU root");
-ui_print(" ");
+# Copy all kernel partition images
+for img in boot vendor_kernel_boot dtbo vendor_dlkm system_dlkm; do
+	if [[ -f "$OUT_DIR/images/${img}.img" ]]; then
+		cp "$OUT_DIR/images/${img}.img" "$FLASH_DIR/"
+		echo "  + ${img}.img"
+	fi
+done
 
-show_progress(0.1, 0);
-ui_print("- Flashing boot.img...");
-package_extract_file("boot.img", "/dev/block/by-name/boot");
-show_progress(0.4, 0);
-
-ui_print("- Flashing vendor_kernel_boot.img...");
-if (file_exists("vendor_kernel_boot.img")) {
-  package_extract_file("vendor_kernel_boot.img", "/dev/block/by-name/vendor_kernel_boot");
-}
-show_progress(0.7, 0);
-
-ui_print("- Flashing dtbo.img...");
-if (file_exists("dtbo.img")) {
-  package_extract_file("dtbo.img", "/dev/block/by-name/dtbo");
-}
-show_progress(1.0, 0);
-
-ui_print(" ");
-ui_print("Done! Reboot to activate WiFi/BT fixes + KernelSU.");
-UPDATER
+if [[ ! -f "$FLASH_DIR/boot.img" ]]; then
+	echo "ERROR: boot.img missing from out/images/"
+	exit 1
+fi
 
 # Create flashable ZIP
 cd "$FLASH_DIR"
-zip -r9 "$ZIP_PATH" . -i \*
+zip -r9 "$ZIP_PATH" . -x '*.git*' 'README.md' '*placeholder*'
 cd "$ROOT"
 
-# Checksums
 sha256sum "$ZIP_PATH" > "${ZIP_PATH}.sha256"
-md5sum "$ZIP_PATH" > "${ZIP_PATH}.md5"
 
 echo "==> Packaged: $ZIP_PATH"
-echo "    SHA256: $(cat "${ZIP_PATH}.sha256")"
+ls -lh "$OUT_DIR/images/"*.img 2>/dev/null || true

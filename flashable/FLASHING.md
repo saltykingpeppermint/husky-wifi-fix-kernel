@@ -1,98 +1,66 @@
 # Flashing Guide — Pixel 8 Pro (husky)
 
-## Before You Flash
+## Recover from bootloop FIRST
 
-1. **Back up** your data
-2. **Bootloader unlocked** (required)
-3. **Android 16 stock firmware** installed — LineageOS requires matching vendor firmware
-4. **LineageOS 22.2+** installed (or stock Android 16 to test kernel alone)
-5. Capture baseline logs: `adb shell su -c "dmesg" > dmesg-before.txt`
+If stuck at the Google logo, reflash LineageOS stock kernel images:
 
-## Method 1: Test Boot (Safest)
-
-Does not permanently flash — reboot reverts to previous kernel.
+1. Download LineageOS for husky from [download.lineageos.org/devices/husky](https://download.lineageos.org/devices/husky)
+2. Extract `boot.img`, `dtbo.img`, `vendor_kernel_boot.img` from the zip
+3. Flash:
 
 ```bash
 adb reboot bootloader
-fastboot boot out/images/boot.img
-```
-
-Wait for boot. Test WiFi and Bluetooth for 30+ minutes (warm-up test).
-
-## Method 2: Fastboot Flash
-
-```bash
-adb reboot bootloader
-
-fastboot flash boot out/images/boot.img
-fastboot flash vendor_kernel_boot out/images/vendor_kernel_boot.img
-fastboot flash dtbo out/images/dtbo.img
-
-fastboot reboot
-```
-
-## Method 3: Recovery ZIP
-
-1. Copy `out/flashable/husky-wifi-fix-*.zip` to phone
-2. Reboot to Lineage Recovery
-3. Apply update → Install from storage → select ZIP
-4. Reboot
-
-## Verify KernelSU Root
-
-```bash
-adb shell su -c id
-# Expected: uid=0(root) gid=0(root)
-
-adb shell su -c "cat /proc/version"
-# Should contain KernelSU build string
-```
-
-Install KernelSU manager APK from: https://github.com/tiann/KernelSU/releases
-
-## Verify WiFi/BT Fix
-
-```bash
-# Check recovery patches are active
-adb shell su -c "dmesg | grep -iE 'wlan_bt_recovery|L1SS disable|retry'"
-
-# Monitor for link drops over 30 min
-adb shell su -c "dmesg -w" | grep -iE "pcie|wlan|link"
-```
-
-## Tune Recovery (Optional)
-
-If WiFi is unstable, adjust module params via adb:
-
-```bash
-# More aggressive PMIC retries
-adb shell su -c "echo 12 > /sys/module/s2mpg15/parameters/wlan_bt_rail_retries"
-
-# More PCIe link retries
-adb shell su -c "echo 40 > /sys/module/pcie_brcm/parameters/pcie_brcm_link_retries"
-
-# Disable runtime watchdog if it causes loops
-adb shell su -c "echo 0 > /sys/module/wlan_bt_recovery/parameters/recovery_enabled"
-```
-
-## Rollback
-
-Flash stock boot images from [Google Factory Images](https://developer.android.com/studio/run/win-usb):
-
-```bash
 fastboot flash boot boot.img
 fastboot flash vendor_kernel_boot vendor_kernel_boot.img
 fastboot flash dtbo dtbo.img
 fastboot reboot
 ```
 
-## If WiFi Still Dead After Kernel
+## Why the previous build bootlooped
 
-Your device likely has a **hardware fault** (BGA solder on BCM4389 module). Options:
+1. **`fastboot boot boot.img` does not work** on Pixel 8 Pro — the bootloader cannot combine `boot` + `vendor_kernel_boot` at runtime
+2. **Missing `vendor_dlkm.img` and `system_dlkm.img`** — GKI modules must match the custom kernel
+3. **Recovery ZIP was broken** — used wrong format; new builds use AnyKernel3
+4. **Protected GKI exports** — blocked WiFi/BT driver loading (now fixed in build)
 
-1. **Reflow/reball** the WiFi IC (G5602550) — ~$80–150 at a board repair shop
-2. **Tighten motherboard screw** near WiFi module (some users report this helps)
-3. **Google RMA** — cite the widespread Pixel 8 WiFi failure reports
-4. **Motherboard replacement**
+## Correct flash procedure (fastboot)
 
-Hardware repair is the only fix when dmesg shows `status=FAILED` on every boot with zero recovery across all retries.
+Download **all five** images from the release:
+
+```bash
+adb reboot bootloader
+
+# Stage 1: bootloader mode
+fastboot flash boot boot.img
+fastboot flash vendor_kernel_boot vendor_kernel_boot.img
+fastboot flash dtbo dtbo.img
+
+# Stage 2: fastbootd (required for dynamic DLKM partitions)
+fastboot reboot fastboot
+# Wait until: fastboot getvar is-userspace → yes
+
+fastboot flash vendor_dlkm vendor_dlkm.img
+fastboot flash system_dlkm system_dlkm.img
+
+fastboot reboot
+```
+
+First boot may take up to 15 minutes.
+
+## Flash via recovery ZIP
+
+Use `husky-wifi-fix-*.zip` from the release (AnyKernel3 format). Flash from Lineage Recovery → Apply update. The ZIP handles fastbootd transition for DLKM partitions automatically.
+
+## Verify
+
+```bash
+adb shell su -c id                    # KernelSU root
+adb shell su -c "cat /proc/version"   # custom kernel string
+adb shell su -c "dmesg | grep -i wlan_bt_recovery"
+```
+
+## Requirements
+
+- Bootloader unlocked
+- Android 16 vendor firmware (LineageOS 22.2+ or matching stock)
+- Do **not** mix kernel images from different builds
